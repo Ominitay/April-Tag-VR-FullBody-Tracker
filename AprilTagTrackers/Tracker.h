@@ -28,6 +28,8 @@ public:
     void StartTrackerCalib();
     void Start();
 
+    bool PerformImshow();
+
     bool mainThreadRunning = false;
     bool cameraRunning = false;
     bool previewCamera = false;
@@ -57,6 +59,12 @@ private:
     std::mutex cameraImageMutex;
     cv::Mat cameraImage;
     bool imageReady = false;
+
+    std::mutex previewImageMutex;
+    cv::Mat previewImage;
+
+    std::mutex outImageMutex;
+    cv::Mat outImage;
 
     Parameters* parameters;
     Connection* connection;

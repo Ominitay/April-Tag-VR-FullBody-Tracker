@@ -38,8 +38,17 @@ bool MyApp::OnInit()
     Connect(GUI::START_BUTTON, wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler(MyApp::ButtonPressedStart));
     Connect(GUI::SPACE_CALIB_CHECKBOX, wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler(MyApp::ButtonPressedSpaceCalib));
     Connect(GUI::MANUAL_CALIB_CHECKBOX, wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler(MyApp::ButtonPressedSpaceCalib));
+    Connect(wxID_ANY, wxEVT_IDLE, wxIdleEventHandler(MyApp::OnIdle));
 
     return true;
+}
+
+void MyApp::OnIdle(wxIdleEvent& event)
+{
+    if (tracker->PerformImshow())
+    {
+        event.RequestMore(); // Render continuously.
+    }
 }
 
 void MyApp::ButtonPressedCamera(wxCommandEvent& event)

@@ -29,6 +29,18 @@
 
 namespace {
 
+void tryDestroyWindow(const char* name)
+{
+    try
+    {
+        cv::destroyWindow(name);
+    }
+    catch (const cv::Exception&)
+    {
+        // Ignore exception, it is probably that the window is already closed.
+    }
+}
+
 void detectMarkersApriltag(cv::Mat frame, std::vector<std::vector<cv::Point2f> >* corners, std::vector<int>* ids, std::vector<cv::Point2f>* centers, apriltag_detector_t* td)
 {
     cv::Mat gray;
@@ -269,7 +281,7 @@ void Tracker::StartCamera(std::string id, int apiPreference)
         cap.set(cv::CAP_PROP_EXPOSURE, parameters->cameraExposure);
         cap.set(cv::CAP_PROP_GAIN, parameters->cameraGain);
     }
-    
+
     cameraRunning = true;
     cameraThread = std::thread(&Tracker::CameraLoop, this);
     cameraThread.detach();
@@ -295,7 +307,6 @@ void Tracker::CameraLoop()
         rotateFlag = cv::ROTATE_90_COUNTERCLOCKWISE;
     }
     cv::Mat img;
-    cv::Mat drawImg;
     while (cameraRunning)
     {
         if (!cap.read(img))
@@ -313,22 +324,12 @@ void Tracker::CameraLoop()
         }
         if (previewCamera || previewCameraCalibration)
         {
+            std::lock_guard<std::mutex> lock(previewImageMutex);
+            img.copyTo(previewImage);
             if (previewCameraCalibration)
             {
-                img.copyTo(drawImg);
-                previewCalibration(drawImg, parameters);
-                cv::imshow("Preview", drawImg);
-                cv::waitKey(1);
+                previewCalibration(previewImage, parameters);
             }
-            else
-            {
-                cv::imshow("Preview", img);
-                cv::waitKey(1);
-            }
-        }
-        else
-        {
-            cv::destroyWindow("Preview");
         }
         {
             std::lock_guard<std::mutex> lock(cameraImageMutex);
@@ -342,7 +343,6 @@ void Tracker::CameraLoop()
             imageReady = true;
         }
     }
-    cv::destroyAllWindows();
     cap.release();
 }
 
@@ -398,7 +398,6 @@ void Tracker::CalibrateCameraCharuco()
     cv::Mat image;
     cv::Mat gray;
     cv::Mat drawImg;
-    cv::Mat outImg;
 
     cv::Ptr<cv::aruco::Dictionary> dictionary = cv::aruco::getPredefinedDictionary(cv::aruco::DICT_4X4_50);
     cv::Ptr<cv::aruco::DetectorParameters> params = cv::aruco::DetectorParameters::create();
@@ -407,9 +406,7 @@ void Tracker::CalibrateCameraCharuco()
     cv::Ptr<cv::aruco::CharucoBoard> board = cv::aruco::CharucoBoard::create(8, 7, 0.04f, 0.02f, dictionary);
     cv::Mat boardImage;
     //board->draw(cv::Size(1500, 1000), boardImage, 10, 1);
-    //imshow("calibration", boardImage);
     //cv::imwrite("charuco_board.jpg", boardImage);
-    //cv::waitKey(1);
 
     //set our detectors marker border bits to 1 since thats what charuco uses
     params->markerBorderBits = 1;
@@ -463,12 +460,13 @@ void Tracker::CalibrateCameraCharuco()
             allCharucoCorners,
             allCharucoIds);
 
-        cv::resize(drawImg, outImg, cv::Size(cols, rows));
-        cv::imshow("out", outImg);
-        char key = (char)cv::waitKey(1);
+        {
+            std::lock_guard<std::mutex> lock(outImageMutex);
+            cv::resize(drawImg, outImage, cv::Size(cols, rows));
+        }
 
         framesSinceLast++;
-        if (key != -1 || framesSinceLast > parameters->camFps)
+        if (framesSinceLast > parameters->camFps)
         {
             framesSinceLast = 0;
             //if any button was pressed
@@ -498,9 +496,10 @@ void Tracker::CalibrateCameraCharuco()
                     allCharucoIds.push_back(charucoIds);
                     picsTaken++;
 
-                    cv::resize(drawImg, outImg, cv::Size(cols, rows));
-                    cv::imshow("out", outImg);
-                    char key = (char)cv::waitKey(1);
+                    {
+                        std::lock_guard<std::mutex> lock(outImageMutex);
+                        cv::resize(drawImg, outImage, cv::Size(cols, rows));
+                    }
 
                     if (picsTaken >= 3)
                     {
@@ -521,7 +520,6 @@ void Tracker::CalibrateCameraCharuco()
         }
     }
 
-    cv::destroyAllWindows();
     mainThreadRunning = false;
     if (messageDialogResponse == wxID_OK)
     {
@@ -596,7 +594,6 @@ void Tracker::CalibrateCamera()
     {
         if (!mainThreadRunning || !cameraRunning)
         {
-            cv::destroyAllWindows();
             return;
         }
         CopyFreshCameraImageTo(image);
@@ -613,11 +610,14 @@ void Tracker::CalibrateCamera()
             cols = drawImgSize;
             rows = image.rows * drawImgSize / image.cols;
         }
-        cv::resize(image, drawImg, cv::Size(cols,rows));
-        cv::imshow("out", drawImg);
-        char key = (char)cv::waitKey(1);
+
+        {
+            std::lock_guard<std::mutex> lock(outImageMutex);
+            cv::resize(image, outImage, cv::Size(cols,rows));
+        }
+
         framesSinceLast++;
-        if (key != -1 || framesSinceLast > 50)
+        if (framesSinceLast > 50)
         {
             framesSinceLast = 0;
             cv::cvtColor(image, image,cv:: COLOR_BGR2GRAY);
@@ -637,9 +637,11 @@ void Tracker::CalibrateCamera()
                 imgpoints.push_back(corner_pts);
             }
 
-            cv::resize(image, drawImg, cv::Size(cols, rows));
-            cv::imshow("out", drawImg);
-            cv::waitKey(1000);
+            {
+                std::lock_guard<std::mutex> lock(outImageMutex);
+                cv::resize(image, outImage, cv::Size(cols,rows));
+            }
+            // TODO(Rasmus): Sleep one second.
         }
     }
 
@@ -651,7 +653,6 @@ void Tracker::CalibrateCamera()
     parameters->distCoeffs = distCoeffs;
     parameters->Save();
     mainThreadRunning = false;
-    cv::destroyAllWindows();
     wxMessageDialog dial(NULL,
         wxT("Calibration complete."), wxT("Info"), wxOK);
     dial.ShowModal();
@@ -853,7 +854,6 @@ void Tracker::CalibrateTracker()
                 wxMessageDialog dial(NULL,
                     wxT("Something went wrong. Try again."), wxT("Error"), wxOK | wxICON_ERROR);
                 dial.ShowModal();
-                cv::destroyWindow("out");
                 apriltag_detector_destroy(td);
                 mainThreadRunning = false;
                 return;
@@ -925,7 +925,6 @@ void Tracker::CalibrateTracker()
                 }
             }
         }
-        cv::Mat drawImg;
         int cols, rows;
         if (image.cols > image.rows)
         {
@@ -937,9 +936,10 @@ void Tracker::CalibrateTracker()
             cols = drawImgSize;
             rows = image.rows * drawImgSize / image.cols;
         }
-        cv::resize(image, drawImg, cv::Size(cols, rows));
-        cv::imshow("out", drawImg);
-        cv::waitKey(1);
+        {
+            std::lock_guard<std::mutex> lock(outImageMutex);
+            cv::resize(image, outImage, cv::Size(cols, rows));
+        }
     }
     trackers.clear();
     for (int i = 0; i < boardIds.size(); i++)
@@ -951,7 +951,6 @@ void Tracker::CalibrateTracker()
     parameters->Save();
     trackersCalibrated = true;
 
-    cv::destroyWindow("out");
     apriltag_detector_destroy(td);
     mainThreadRunning = false;
 }
@@ -1190,7 +1189,6 @@ void Tracker::MainLoop()
                     "If the problem persists, try to recalibrate camera and trackers."),
                     wxT("Error"), wxOK | wxICON_ERROR);
                 dial.ShowModal();
-                cv::destroyWindow("out");
                 apriltag_detector_destroy(td);
                 mainThreadRunning = false;
                 return;
@@ -1318,9 +1316,45 @@ void Tracker::MainLoop()
         }
         cv::resize(drawImg, drawImg, cv::Size(cols, rows));
         cv::putText(drawImg, std::to_string(frameTime).substr(0,5), cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(255, 255, 255));
-        cv::imshow("out", drawImg);
-        cv::waitKey(1);
+        {
+            std::lock_guard<std::mutex> lock(outImageMutex);
+            drawImg.copyTo(outImage);
+        }
         //time of marker detection
     }
-    cv::destroyWindow("out");
+}
+
+// This is run in the main thread of the application from MyApp::OnIdle().
+bool Tracker::PerformImshow()
+{
+    bool wantMore = false;
+    if (previewCamera || previewCameraCalibration)
+    {
+        wantMore = true;
+        std::lock_guard<std::mutex> lock(previewImageMutex);
+        if (!previewImage.empty())
+        {
+            cv::imshow("Preview", previewImage);
+        }
+    }
+    else
+    {
+        tryDestroyWindow("Preview");
+    }
+
+    if (mainThreadRunning)
+    {
+        wantMore = true;
+        std::lock_guard<std::mutex> lock(outImageMutex);
+        if (!outImage.empty())
+        {
+            cv::imshow("out", outImage);
+        }
+    }
+    else
+    {
+        tryDestroyWindow("out");
+    }
+    cv::waitKey(1);
+    return wantMore;
 }

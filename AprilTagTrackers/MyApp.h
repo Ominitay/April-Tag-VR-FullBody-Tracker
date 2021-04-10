@@ -22,6 +22,7 @@ class MyApp : public wxApp
 public:
     virtual int OnExit() wxOVERRIDE;
     virtual bool OnInit() wxOVERRIDE;
+    virtual void OnIdle(wxIdleEvent& event);
     void ButtonPressedCamera(wxCommandEvent&);
     void ButtonPressedCameraPreview(wxCommandEvent&);
     void ButtonPressedCameraCalib(wxCommandEvent&);
